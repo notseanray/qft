@@ -1,3 +1,4 @@
+use lz4_flex::block::{compress_prepend_size, decompress_size_prepended};
 use std::{
     collections::{hash_map::Entry, HashMap},
     env,
@@ -9,7 +10,6 @@ use std::{
     thread,
     time::{Duration, SystemTime},
 };
-use xz::read::{XzDecoder, XzEncoder};
 
 #[derive(Ord, Eq, PartialOrd, PartialEq)]
 enum SafeReadWritePacket {
@@ -209,13 +209,7 @@ impl SafeReadWrite {
                             if let Some(buf) = buf {
                                 loop {
                                     // resend until success
-                                    match self.socket.send(
-                                        XzEncoder::new(buf.as_slice(), 9)
-                                            .bytes()
-                                            .map(|x| x.unwrap())
-                                            .collect::<Vec<u8>>()
-                                            .as_slice(),
-                                    ) {
+                                    match self.socket.send(&compress_prepend_size(buf.as_slice())) {
                                         Ok(x) => {
                                             if x != buf.len() {
                                                 continue;
@@ -478,12 +472,7 @@ pub fn receiver<F: Fn(f32)>(args: &[String], on_progress: F) {
         }
 
         let _ = file
-            .write(
-                &XzDecoder::new(buf)
-                    .bytes()
-                    .map(|x| x.unwrap())
-                    .collect::<Vec<u8>>(),
-            )
+            .write(decompress_size_prepended(buf).unwrap().as_slice())
             .expect("write error");
         file.flush().expect("file flush error");
         bytes_received += amount as u64;
