@@ -8,3 +8,4 @@ edition = "2021"
 [dependencies]
 rand = "0"
 time = "0"
+xz = "0.1.0"

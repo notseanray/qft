@@ -9,6 +9,7 @@ use std::{
     thread,
     time::{Duration, SystemTime},
 };
+use xz::read::{XzDecoder, XzEncoder};
 
 #[derive(Ord, Eq, PartialOrd, PartialEq)]
 enum SafeReadWritePacket {
@@ -208,7 +209,13 @@ impl SafeReadWrite {
                             if let Some(buf) = buf {
                                 loop {
                                     // resend until success
-                                    match self.socket.send(buf.as_slice()) {
+                                    match self.socket.send(
+                                        XzEncoder::new(buf.as_slice(), 9)
+                                            .bytes()
+                                            .map(|x| x.unwrap())
+                                            .collect::<Vec<u8>>()
+                                            .as_slice(),
+                                    ) {
                                         Ok(x) => {
                                             if x != buf.len() {
                                                 continue;
@@ -355,7 +362,7 @@ pub fn sender<F: Fn(f32)>(args: &[String], on_progress: F) {
     let connection = holepunch(args);
     let br = args
         .get(5)
-        .map(|s| s.parse::<u32>())
+        .map(|s| s.parse::<usize>())
         .unwrap_or(Ok(256))
         .expect("bad bitrate argument");
     let begin = args
@@ -364,7 +371,7 @@ pub fn sender<F: Fn(f32)>(args: &[String], on_progress: F) {
         .unwrap_or(Ok(0))
         .expect("bad begin operand");
     let mut buf: Vec<u8> = Vec::new();
-    buf.resize(br as usize, 0);
+    buf.resize(br, 0);
     let buf = buf.leak();
     let mut file = File::open(args.get(4).unwrap_or_else(|| {
         print_args(args);
@@ -404,7 +411,7 @@ pub fn sender<F: Fn(f32)>(args: &[String], on_progress: F) {
             print!(
                 "\r\x1b[KSent {} bytes; Speed: {} kb/s",
                 bytes_sent,
-                br as usize * 20 / elapsed as usize
+                br * 20 / elapsed as usize
             );
             stdout().flush().unwrap();
             time = unix_millis();
@@ -470,7 +477,14 @@ pub fn receiver<F: Fn(f32)>(args: &[String], on_progress: F) {
             return;
         }
 
-        let _ = file.write(buf).expect("write error");
+        let _ = file
+            .write(
+                &XzDecoder::new(buf)
+                    .bytes()
+                    .map(|x| x.unwrap())
+                    .collect::<Vec<u8>>(),
+            )
+            .expect("write error");
         file.flush().expect("file flush error");
         bytes_received += amount as u64;
         if (bytes_received % (br * 20) as u64) < (br as u64) {
