@@ -1,7 +1,5 @@
-mod gui;
-
 use std::{
-    collections::HashMap,
+    collections::{hash_map::Entry, HashMap},
     env,
     fs::{File, OpenOptions},
     io::{stdout, Error, Read, Seek, SeekFrom, Write},
@@ -11,8 +9,6 @@ use std::{
     thread,
     time::{Duration, SystemTime},
 };
-
-use time::{Date, PrimitiveDateTime, Time};
 
 #[derive(Ord, Eq, PartialOrd, PartialEq)]
 enum SafeReadWritePacket {
@@ -78,57 +74,54 @@ impl SafeReadWrite {
         let mut try_again = true;
         let mut is_catching_up = false;
         while try_again {
-            match self.socket.recv(buf) {
-                Ok(x) => {
-                    if x < 3 {
-                        continue;
-                    }
-                    let id = u16::from_be_bytes([buf[0], buf[1]]);
-                    if id <= self.packet_count_in as u16 {
-                        self.socket
-                            .send(&[buf[0], buf[1], Ack as u8])
-                            .expect("send error");
-                    }
-                    if id == self.packet_count_in as u16 {
-                        if id == 0xffff {
-                            println!("\nPacket ID wrap successful.");
-                        }
-                        try_again = false;
-                        self.packet_count_in += 1;
-                        r.1 = x - 3;
-                    } else if id > self.packet_count_in as u16
-                        && (id - self.packet_count_in as u16) < 0xC000
-                    {
-                        if !is_catching_up && !env::var("QFT_HIDE_DROPS").is_ok() {
-                            println!(
-                                "\r\x1b[KA packet dropped: {} (got) is newer than {} (expected)",
-                                &id,
-                                &(self.packet_count_in as u16)
-                            );
-                        }
-                        is_catching_up = true;
-                        // ask to resend, then do nothing
-                        let id = (self.packet_count_in as u16).to_be_bytes();
-                        self.socket
-                            .send(&[id[0], id[1], ResendRequest as u8])
-                            .expect("send error");
-                    }
-                    if buf[2] == End as u8 {
-                        return Ok((vec![], 0));
-                    }
+            if let Ok(x) = self.socket.recv(buf) {
+                if x < 3 {
+                    continue;
                 }
-                Err(_) => {}
+                let id = u16::from_be_bytes([buf[0], buf[1]]);
+                if id <= self.packet_count_in as u16 {
+                    self.socket
+                        .send(&[buf[0], buf[1], Ack as u8])
+                        .expect("send error");
+                }
+                if id == self.packet_count_in as u16 {
+                    if id == 0xffff {
+                        println!("\nPacket ID wrap successful.");
+                    }
+                    try_again = false;
+                    self.packet_count_in += 1;
+                    r.1 = x - 3;
+                } else if id > self.packet_count_in as u16
+                    && (id - self.packet_count_in as u16) < 0xC000
+                {
+                    if !is_catching_up && env::var("QFT_HIDE_DROPS").is_err() {
+                        println!(
+                            "\r\x1b[KA packet dropped: {} (got) is newer than {} (expected)",
+                            &id,
+                            &(self.packet_count_in as u16)
+                        );
+                    }
+                    is_catching_up = true;
+                    // ask to resend, then do nothing
+                    let id = (self.packet_count_in as u16).to_be_bytes();
+                    self.socket
+                        .send(&[id[0], id[1], ResendRequest as u8])
+                        .expect("send error");
+                }
+                if buf[2] == End as u8 {
+                    return Ok((vec![], 0));
+                }
             }
         }
         mbuf.remove(0);
         mbuf.remove(0);
         mbuf.remove(0);
         r.0 = mbuf;
-        return Ok(r);
+        Ok(r)
     }
 
     pub fn end(mut self) -> UdpSocket {
-        let _ = self.internal_write_safe(&mut [], End, true, true);
+        let _ = self.internal_write_safe(&[], End, true, true);
 
         self.socket
     }
@@ -205,7 +198,7 @@ impl SafeReadWrite {
                     }
                     if buf[2] == ResendRequest as u8 {
                         let mut n = u16::from_be_bytes([buf[0], buf[1]]);
-                        if !is_catching_up && !env::var("QFT_HIDE_DROPS").is_ok() {
+                        if !is_catching_up && env::var("QFT_HIDE_DROPS").is_err() {
                             println!("\r\x1b[KA packet dropped: {}", &n);
                         }
                         wait = true;
@@ -215,7 +208,7 @@ impl SafeReadWrite {
                             if let Some(buf) = buf {
                                 loop {
                                     // resend until success
-                                    match self.socket.send(&buf.as_slice()) {
+                                    match self.socket.send(buf.as_slice()) {
                                         Ok(x) => {
                                             if x != buf.len() {
                                                 continue;
@@ -269,20 +262,14 @@ impl SafeReadWrite {
         self.socket
             .set_read_timeout(Some(Duration::from_millis(1000)))
             .unwrap();
-        return Ok(());
+        Ok(())
     }
 }
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    if args.len() == 0 {
+    if args.is_empty() {
         panic!("no args");
-    }
-    if args.len() == 1 {
-        match gui::gui() {
-            Ok(_) => (),
-            Err(_) => print_args(&args),
-        }
     }
     match args
         .get(1)
@@ -292,95 +279,93 @@ fn main() {
         "helper" => helper(&args),
         "sender" => sender(&args, |_| {}),
         "receiver" => receiver(&args, |_| {}),
-        "gui" => gui::gui().expect("can't use gui"),
         "version" => println!("QFT version: {}", env!("CARGO_PKG_VERSION")),
         _ => print_args(&args),
     }
 }
 
-pub fn helper(args: &Vec<String>) {
+pub fn helper(args: &[String]) {
     let bind_addr = (
         "0.0.0.0",
-        u16::from_str_radix(args[2].as_str(), 10).expect("invalid port: must be integer"),
+        args[2]
+            .as_str()
+            .parse::<u16>()
+            .expect("invalid port: must be integer"),
     );
     let mut map: HashMap<[u8; 200], SocketAddr> = HashMap::new();
-    let listener = UdpSocket::bind(&bind_addr).expect("unable to create socket");
-    let mut buf = [0 as u8; 200];
-    let mut last_log_time = unix_millis();
-    let mut amount_since_log = 0;
-    let mut helper_log = OpenOptions::new()
-        .create(true)
-        .write(true)
-        .append(true)
-        .open("qft_helper_log.txt")
-        .expect("unable to create helper log");
+    let listener = UdpSocket::bind(bind_addr).expect("unable to create socket");
+    let mut buf = [0; 200];
+    // let mut last_log_time = unix_millis();
+    // let mut amount_since_log = 0;
+    // let mut helper_log = OpenOptions::new()
+    //     .create(true)
+    //     .write(true)
+    //     .append(true)
+    //     .open("qft_helper_log.txt")
+    //     .expect("unable to create helper log");
     loop {
         let (l, addr) = listener.recv_from(&mut buf).expect("read error");
         if l != 200 {
             continue;
         }
-        if map.contains_key(&buf) {
+        if let Entry::Vacant(_) = map.entry(buf) {
+            map.insert(buf, addr);
+        } else {
             let other = map.get(&buf).unwrap();
             // we got a connection
             let mut bytes: &[u8] = addr.to_string().bytes().collect::<Vec<u8>>().leak();
-            let mut addr_buf = [0 as u8; 200];
-            for i in 0..bytes.len().min(200) {
-                addr_buf[i] = bytes[i];
-            }
+            let mut addr_buf = [0; 200];
+            addr_buf[..bytes.len().min(200)].copy_from_slice(&bytes[..bytes.len().min(200)]);
             bytes = other.to_string().bytes().collect::<Vec<u8>>().leak();
-            let mut other_buf = [0 as u8; 200];
-            for i in 0..bytes.len().min(200) {
-                other_buf[i] = bytes[i];
-            }
+            let mut other_buf = [0; 200];
+            other_buf[..bytes.len().min(200)].copy_from_slice(&bytes[..bytes.len().min(200)]);
             if listener.send_to(&addr_buf, other).is_ok()
                 && listener.send_to(&other_buf, addr).is_ok()
             {
                 // success!
                 println!("Helped {} and {}! :D", addr, other);
-                amount_since_log += 1;
-                if unix_millis() - last_log_time > 10000 {
-                    let d = PrimitiveDateTime::new(
-                        Date::from_calendar_date(1970, time::Month::January, 1).unwrap(),
-                        Time::MIDNIGHT,
-                    ) + Duration::from_millis(unix_millis());
-                    helper_log
-                        .write(
-                            format!(
-                                "{} | {} {}>\n",
-                                d,
-                                amount_since_log,
-                                amount_since_log * Wrap("=")
-                            )
-                            .as_bytes(),
-                        )
-                        .expect("error writing to log");
-                    helper_log.flush().expect("error writing to log");
-                    last_log_time = unix_millis();
-                    amount_since_log = 0;
-                }
+                // amount_since_log += 1;
+                // if unix_millis() - last_log_time > 10000 {
+                // let d = PrimitiveDateTime::new(
+                //     Date::from_calendar_date(1970, time::Month::January, 1).unwrap(),
+                //     Time::MIDNIGHT,
+                // ) + Duration::from_millis(unix_millis());
+                // helper_log
+                //     .write(
+                //         format!(
+                //             "{} | {} {}>\n",
+                //             d,
+                //             amount_since_log,
+                //             amount_since_log * Wrap("=")
+                //         )
+                //         .as_bytes(),
+                //     )
+                //     .expect("error writing to log");
+                // helper_log.flush().expect("error writing to log");
+                // last_log_time = unix_millis();
+                // amount_since_log = 0;
+                // }
             }
             map.remove(&buf);
-        } else {
-            map.insert(buf, addr);
         }
     }
 }
 
-pub fn sender<F: Fn(f32)>(args: &Vec<String>, on_progress: F) {
+pub fn sender<F: Fn(f32)>(args: &[String], on_progress: F) {
     let connection = holepunch(args);
     let br = args
         .get(5)
-        .map(|s| u32::from_str_radix(s, 10))
+        .map(|s| s.parse::<u32>())
         .unwrap_or(Ok(256))
         .expect("bad bitrate argument");
     let begin = args
         .get(6)
-        .map(|s| u64::from_str_radix(s, 10))
+        .map(|s| s.parse::<u64>())
         .unwrap_or(Ok(0))
         .expect("bad begin operand");
     let mut buf: Vec<u8> = Vec::new();
     buf.resize(br as usize, 0);
-    let mut buf = buf.leak();
+    let buf = buf.leak();
     let mut file = File::open(args.get(4).unwrap_or_else(|| {
         print_args(args);
         panic!("unreachable")
@@ -402,8 +387,8 @@ pub fn sender<F: Fn(f32)>(args: &Vec<String>, on_progress: F) {
     println!("Length: {}", &len);
     let mut time = unix_millis();
     loop {
-        let read = file.read(&mut buf).expect("file read error");
-        if read == 0 && !env::var("QFT_STREAM").is_ok() {
+        let read = file.read(buf).expect("file read error");
+        if read == 0 && env::var("QFT_STREAM").is_err() {
             println!();
             println!("Transfer done. Thank you!");
             sc.end();
@@ -416,8 +401,11 @@ pub fn sender<F: Fn(f32)>(args: &Vec<String>, on_progress: F) {
             let elapsed = unix_millis() - time;
             let elapsed = if elapsed == 0 { 1 } else { elapsed };
 
-            print!("\r\x1b[KSent {} bytes; Speed: {} kb/s",
-                   bytes_sent, br as usize * 20 / elapsed as usize );
+            print!(
+                "\r\x1b[KSent {} bytes; Speed: {} kb/s",
+                bytes_sent,
+                br as usize * 20 / elapsed as usize
+            );
             stdout().flush().unwrap();
             time = unix_millis();
         }
@@ -428,16 +416,16 @@ pub fn sender<F: Fn(f32)>(args: &Vec<String>, on_progress: F) {
     }
 }
 
-pub fn receiver<F: Fn(f32)>(args: &Vec<String>, on_progress: F) {
+pub fn receiver<F: Fn(f32)>(args: &[String], on_progress: F) {
     let connection = holepunch(args);
     let br = args
         .get(5)
-        .map(|s| u32::from_str_radix(s, 10))
+        .map(|s| s.parse::<u32>())
         .unwrap_or(Ok(256))
         .expect("bad bitrate argument");
     let begin = args
         .get(6)
-        .map(|s| u64::from_str_radix(s, 10))
+        .map(|s| s.parse::<u64>())
         .unwrap_or(Ok(0))
         .expect("bad begin operand");
     let mut buf: Vec<u8> = Vec::new();
@@ -447,7 +435,7 @@ pub fn receiver<F: Fn(f32)>(args: &Vec<String>, on_progress: F) {
         .truncate(false)
         .write(true)
         .create(true)
-        .open(&args.get(4).unwrap_or_else(|| {
+        .open(args.get(4).unwrap_or_else(|| {
             print_args(args);
             panic!("unreachable")
         }))
@@ -462,9 +450,9 @@ pub fn receiver<F: Fn(f32)>(args: &Vec<String>, on_progress: F) {
     let mut sc = SafeReadWrite::new(connection);
     let mut bytes_received: u64 = 0;
     let mut last_update = unix_millis();
-    let mut len_bytes = [0 as u8; 8];
+    let len_bytes = [0; 8];
     let len = sc
-        .read_safe(&mut len_bytes)
+        .read_safe(&len_bytes)
         .expect("unable to read length from sender")
         .0;
     let len = u64::from_be_bytes([
@@ -482,15 +470,18 @@ pub fn receiver<F: Fn(f32)>(args: &Vec<String>, on_progress: F) {
             return;
         }
 
-        file.write(buf).expect("write error");
+        let _ = file.write(buf).expect("write error");
         file.flush().expect("file flush error");
         bytes_received += amount as u64;
         if (bytes_received % (br * 20) as u64) < (br as u64) {
             let elapsed = unix_millis() - time;
             let elapsed = if elapsed == 0 { 1 } else { elapsed };
 
-            print!("\r\x1b[KReceived {} bytes; Speed: {} kb/s",
-                   bytes_received, br as usize * 20 / elapsed as usize );
+            print!(
+                "\r\x1b[KReceived {} bytes; Speed: {} kb/s",
+                bytes_received,
+                br as usize * 20 / elapsed as usize
+            );
             stdout().flush().unwrap();
             time = unix_millis();
         }
@@ -501,9 +492,9 @@ pub fn receiver<F: Fn(f32)>(args: &Vec<String>, on_progress: F) {
     }
 }
 
-fn holepunch(args: &Vec<String>) -> UdpSocket {
-    let bind_addr = (Ipv4Addr::from(0 as u32), 0);
-    let holepunch = UdpSocket::bind(&bind_addr).expect("unable to create socket");
+fn holepunch(args: &[String]) -> UdpSocket {
+    let bind_addr = (Ipv4Addr::from(0), 0);
+    let holepunch = UdpSocket::bind(bind_addr).expect("unable to create socket");
     holepunch
         .connect(args.get(2).unwrap_or_else(|| {
             print_args(args);
@@ -517,10 +508,8 @@ fn holepunch(args: &Vec<String>) -> UdpSocket {
             panic!("unreachable")
         })
         .as_bytes();
-    let mut buf = [0 as u8; 200];
-    for i in 0..bytes.len().min(200) {
-        buf[i] = bytes[i];
-    }
+    let mut buf = [0; 200];
+    buf[..bytes.len().min(200)].copy_from_slice(&bytes[..bytes.len().min(200)]);
     holepunch.send(&buf).expect("unable to talk to helper");
     holepunch
         .recv(&mut buf)
@@ -586,10 +575,10 @@ fn holepunch(args: &Vec<String>) -> UdpSocket {
         }
     }
     println!("Holepunch and connection successful.");
-    return holepunch;
+    holepunch
 }
 
-fn print_args(args: &Vec<String>) {
+fn print_args(args: &[String]) {
     let f = args.get(0).unwrap();
     println!(
         "No arguments. Needed: \n\
